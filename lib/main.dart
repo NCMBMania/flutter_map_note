@@ -12,6 +12,8 @@ import 'dart:typed_data';
 import 'package:image_picker/image_picker.dart';
 import 'package:uuid/uuid.dart';
 import 'package:http/http.dart' as http;
+import 'package:flutter/painting.dart';
+import 'package:geolocator/geolocator.dart';
 
 Future main() async {
   await dotenv.load(fileName: '.env');
@@ -55,6 +57,15 @@ class _MainPageState extends State<MainPage> {
     const Tab(text: 'リスト', icon: Icon(Icons.list_outlined)),
   ];
 
+  List<NCMBObject> _notes = [];
+  LatLng _location = const LatLng(35.6585805, 139.7454329);
+
+  void _setNotes(List<NCMBObject> notes) {
+    setState(() {
+      _notes = notes;
+    });
+  }
+
   // AppBarとタブを表示
   @override
   Widget build(BuildContext context) {
@@ -67,9 +78,9 @@ class _MainPageState extends State<MainPage> {
             tabs: _tab,
           ),
         ),
-        body: const TabBarView(children: [
-          MapPage(),
-          SettingPage(),
+        body: TabBarView(children: [
+          MapPage(setNotes: _setNotes, location: _location),
+          ListPage(notes: _notes, location: _location),
         ]),
       ),
     );
@@ -78,7 +89,10 @@ class _MainPageState extends State<MainPage> {
 
 // 地図画面用のStatefulWidget
 class MapPage extends StatefulWidget {
-  const MapPage({Key? key}) : super(key: key);
+  const MapPage({Key? key, required this.setNotes, required this.location})
+      : super(key: key);
+  final Function(List<NCMBObject>) setNotes;
+  final LatLng location;
   @override
   State<MapPage> createState() => _MapPageState();
 }
@@ -86,19 +100,23 @@ class MapPage extends StatefulWidget {
 // 地図画面
 class _MapPageState extends State<MapPage> {
   // 地図コントローラーの初期化
-  final controller = MapController(
-    location: const LatLng(35.6585805, 139.7454329),
-    zoom: 13,
-  );
+  MapController? controller;
   // ドラッグ操作用
   Offset? _dragStart;
   double _scaleStart = 1.0;
-  ScaleUpdateDetails? _details;
 
-  // タップした位置の情報
-  final List<LatLng> _clickLocations = [];
   // 表示するマーカー
   List<Widget> _markers = [];
+  Widget? _tooltip;
+
+  @override
+  void initState() {
+    super.initState();
+    controller = MapController(
+      location: widget.location,
+      zoom: 15,
+    );
+  }
 
   // 初期のスケール情報
   void _onScaleStart(ScaleStartDetails details) {
@@ -106,18 +124,21 @@ class _MapPageState extends State<MapPage> {
     _scaleStart = 1.0;
   }
 
+  // センターが変わったときの処理
   void _onScaleUpdate(MapTransformer transformer, ScaleUpdateDetails details) {
     final scaleDiff = details.scale - _scaleStart;
     _scaleStart = details.scale;
     if (scaleDiff > 0) {
-      controller.zoom += 0.02;
+      controller!.zoom += 0.02;
+      setState(() {});
     } else if (scaleDiff < 0) {
-      controller.zoom -= 0.02;
-      if (controller.zoom < 1) {
-        controller.zoom = 1;
+      controller!.zoom -= 0.02;
+      if (controller!.zoom < 1) {
+        controller!.zoom = 1;
       }
+      setState(() {});
     } else {
-      final now = _details!.focalPoint;
+      final now = details.focalPoint;
       var diff = now - _dragStart!;
       _dragStart = now;
       final h = transformer.constraints.maxHeight;
@@ -131,12 +152,11 @@ class _MapPageState extends State<MapPage> {
         diff = Offset(diff.dx, 0);
       }
       transformer.drag(diff.dx, diff.dy);
+      setState(() {});
     }
-    setState(() {});
   }
 
-  // センターが変わったときの処理
-  void _onScaleEnd(MapTransformer transformer, ScaleEndDetails details) {
+  void _onScaleEnd(MapTransformer transformer) {
     // マーカーを表示する
     showNotes(transformer);
   }
@@ -157,11 +177,39 @@ class _MapPageState extends State<MapPage> {
           child: Image.memory(image.data),
           height: 200,
         ),
-        onTap: () {
-          print("Tap");
-        },
+        onTap: () => _onTap(pos.dy, pos.dx, note),
       ),
     );
+  }
+
+  Future<void> _onTap(double top, double left, NCMBObject note) async {
+    final image = await NCMBFile.download(note.getString('image'));
+    final tooltip = Container(
+      margin: const EdgeInsets.only(left: 15.0),
+      padding: const EdgeInsets.symmetric(
+        vertical: 5.0,
+        horizontal: 10.0,
+      ),
+      child: Column(children: [
+        Text(note.getString('text')),
+        Text(note.getString('address', defaultValue: "不明") + "付近のメモ"),
+        SizedBox(
+          child: Image.memory(image.data),
+          height: 200,
+        )
+      ]),
+      decoration: const ShapeDecoration(
+        color: Colors.white,
+        shape: BubbleBorder(),
+      ),
+    );
+    setState(() {
+      _tooltip = Positioned(
+        left: left - 170,
+        top: top - 280,
+        child: tooltip,
+      );
+    });
   }
 
   Future<void> showNotes(MapTransformer transformer) async {
@@ -169,8 +217,8 @@ class _MapPageState extends State<MapPage> {
     final markers = await Future.wait(notes.map((note) async {
       return await _buildMarkerWidget(note, transformer);
     }));
-    print(markers);
     setState(() {
+      widget.setNotes(notes);
       _markers = markers;
     });
   }
@@ -190,6 +238,12 @@ class _MapPageState extends State<MapPage> {
 
   // 地図をタップした際のイベント
   void _onTapUp(MapTransformer transformer, TapUpDetails details) async {
+    if (_tooltip != null) {
+      setState(() {
+        _tooltip = null;
+      });
+      return;
+    }
     // 地図上のXY
     final location = transformer.toLatLng(details.localPosition);
     Navigator.push(
@@ -206,7 +260,7 @@ class _MapPageState extends State<MapPage> {
 
   void _onDoubleTapDown(MapTransformer transformer, TapDownDetails details) {
     const delta = 0.5;
-    final zoom = clamp(controller.zoom + delta, 2, 18);
+    final zoom = clamp(controller!.zoom + delta, 2, 18);
     transformer.setZoomInPlace(zoom, details.localPosition);
     setState(() {});
   }
@@ -214,7 +268,7 @@ class _MapPageState extends State<MapPage> {
   void _onPointerSignal(MapTransformer transformer, PointerSignalEvent event) {
     if (event is! PointerScrollEvent) return;
     final delta = event.scrollDelta.dy / -1000.0;
-    final zoom = clamp(controller.zoom + delta, 2, 18);
+    final zoom = clamp(controller!.zoom + delta, 2, 18);
     transformer.setZoomInPlace(zoom, event.localPosition);
     setState(() {});
   }
@@ -224,7 +278,7 @@ class _MapPageState extends State<MapPage> {
     return Scaffold(
       appBar: null,
       body: MapLayout(
-        controller: controller,
+        controller: controller!,
         builder: (context, transformer) {
           return GestureDetector(
             behavior: HitTestBehavior.opaque,
@@ -234,7 +288,7 @@ class _MapPageState extends State<MapPage> {
             // ピンチ/パン処理
             onScaleStart: _onScaleStart,
             onScaleUpdate: (details) => _onScaleUpdate(transformer, details),
-            onScaleEnd: (details) => _onScaleEnd(transformer, details),
+            onScaleEnd: (details) => _onScaleEnd(transformer),
             // タップした際の処理
             onTapUp: (details) async {
               _onTapUp(transformer, details);
@@ -242,29 +296,27 @@ class _MapPageState extends State<MapPage> {
             child: Listener(
               behavior: HitTestBehavior.opaque,
               onPointerSignal: (event) => _onPointerSignal(transformer, event),
-              child: Stack(
-                  // Mapboxのウィジェットが初期化されているかどうかで処理分け
-                  children: [
-                    TileLayer(
-                      builder: (context, x, y, z) {
-                        final tilesInZoom = pow(2.0, z).floor();
-                        while (x < 0) {
-                          x += tilesInZoom;
-                        }
-                        while (y < 0) {
-                          y += tilesInZoom;
-                        }
-                        x %= tilesInZoom;
-                        y %= tilesInZoom;
-                        return CachedNetworkImage(
-                          imageUrl:
-                              'https://tile.openstreetmap.org/$z/$x/$y.png',
-                          fit: BoxFit.cover,
-                        );
-                      },
-                    ),
-                    ..._markers
-                  ]),
+              child: Stack(children: [
+                TileLayer(
+                  builder: (context, x, y, z) {
+                    final tilesInZoom = pow(2.0, z).floor();
+                    while (x < 0) {
+                      x += tilesInZoom;
+                    }
+                    while (y < 0) {
+                      y += tilesInZoom;
+                    }
+                    x %= tilesInZoom;
+                    y %= tilesInZoom;
+                    return CachedNetworkImage(
+                      imageUrl: 'https://tile.openstreetmap.org/$z/$x/$y.png',
+                      fit: BoxFit.cover,
+                    );
+                  },
+                ),
+                ..._markers,
+                _tooltip != null ? _tooltip! : Container(),
+              ]),
             ),
           );
         },
@@ -403,86 +455,122 @@ class _NotePageState extends State<NotePage> {
 }
 
 // 設定画面用のStatefulWidget
-class SettingPage extends StatefulWidget {
-  const SettingPage({Key? key}) : super(key: key);
+class ListPage extends StatefulWidget {
+  const ListPage({Key? key, required this.notes, required this.location})
+      : super(key: key);
+  final List<NCMBObject> notes;
+  final LatLng location;
+
   @override
-  State<SettingPage> createState() => _SettingPageState();
+  State<ListPage> createState() => _ListPageState();
 }
 
 // 設定画面
-class _SettingPageState extends State<SettingPage> {
-  final List<String> _logs = [];
-  final String _className = 'Station';
-
-  // データストアからすべての駅情報を削除
-  Future<void> deleteAllStations() async {
-    // 駅情報を検索するクエリークラス
-    final query = NCMBQuery(_className);
-    // 検索結果の取得件数
-    query.limit(100);
-    // 検索
-    final ary = await query.fetchAll();
-    // 順番に削除
-    for (var station in ary) {
-      station.delete();
-    }
-  }
-
-  // 位置情報のJSONを取り込む処理
-  Future<void> importGeoPoint() async {
-    // ログを消す
-    setState(() {
-      _logs.clear();
-    });
-    // 全駅情報を消す
-    deleteAllStations();
-    // JSONファイルを読み込む
-    String loadData = await rootBundle.loadString('json/yamanote.json');
-    final stations = json.decode(loadData);
-    // JSONファイルに従って処理
-    stations.forEach((params) async {
-      // 駅情報を作成
-      var station = await saveStation(params);
-      // ログを更新
-      setState(() {
-        _logs.add("${station.get('name')}を保存しました");
-      });
-    });
-  }
-
-  // 駅情報を作成する処理
-  Future<NCMBObject> saveStation(params) async {
-    // NCMBGeoPointを作成
-    var geo = NCMBGeoPoint(
-        double.parse(params['latitude']), double.parse(params['longitude']));
-    // NCMBObjectを作成
-    var station = NCMBObject(_className);
-    // 位置情報、駅名をセット
-    station
-      ..set('name', params['name'])
-      ..set('geo', geo);
-    // 保存
-    await station.save();
-    return station;
-  }
-
+class _ListPageState extends State<ListPage> {
   @override
   Widget build(BuildContext context) {
     return Center(
         child: Column(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        const Text(
-          '山手線のデータをインポートします',
-        ),
-        TextButton(onPressed: importGeoPoint, child: const Text('インポート')),
         Expanded(
           child: ListView.builder(
               itemBuilder: (BuildContext context, int index) =>
-                  Text(_logs[index]),
-              itemCount: _logs.length),
+                  RowPage(note: widget.notes[index], location: widget.location),
+              itemCount: widget.notes.length),
         )
       ],
     ));
   }
+}
+
+// 設定画面用のStatefulWidget
+class RowPage extends StatefulWidget {
+  const RowPage({Key? key, required this.note, required this.location})
+      : super(key: key);
+  final NCMBObject note;
+  final LatLng location;
+  @override
+  State<RowPage> createState() => _RowPageState();
+}
+
+// 設定画面
+class _RowPageState extends State<RowPage> {
+  Uint8List? _image;
+
+  @override
+  void initState() {
+    super.initState();
+    _getImage();
+  }
+
+  Future<void> _getImage() async {
+    if (widget.note.get('image') == null) return;
+    final fileName = widget.note.getString('image');
+    final image = await NCMBFile.download(fileName);
+    setState(() {
+      _image = image.data;
+    });
+  }
+
+  String distance() {
+    final geo = widget.note.get('geo') as NCMBGeoPoint;
+    final dist = Geolocator.distanceBetween(widget.location.latitude,
+        widget.location.longitude, geo.latitude!, geo.longitude!);
+    return dist.toStringAsFixed(0);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(children: [
+      _image != null
+          ? SizedBox(
+              child: Image.memory(_image!),
+              width: 150,
+            )
+          : const SizedBox(
+              child: Icon(
+              Icons.photo,
+              size: 100,
+              color: Colors.grey,
+            )),
+      const Padding(padding: EdgeInsets.only(left: 8)),
+      Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(widget.note.getString('text')),
+        Text(widget.note.getString('address', defaultValue: '不明')),
+        Text('${distance()}m')
+      ])
+    ]);
+  }
+}
+
+class BubbleBorder extends ShapeBorder {
+  final bool usePadding;
+
+  const BubbleBorder({this.usePadding = true});
+
+  @override
+  EdgeInsetsGeometry get dimensions =>
+      EdgeInsets.only(bottom: usePadding ? 12 : 0);
+
+  @override
+  Path getInnerPath(Rect rect, {TextDirection? textDirection}) => Path();
+
+  @override
+  Path getOuterPath(Rect rect, {TextDirection? textDirection}) {
+    final r =
+        Rect.fromPoints(rect.topLeft, rect.bottomRight - const Offset(0, 12));
+    return Path()
+      ..addRRect(RRect.fromRectAndRadius(r, const Radius.circular(8)))
+      ..moveTo(r.bottomCenter.dx - 10, r.bottomCenter.dy)
+      ..relativeLineTo(10, 12)
+      ..relativeLineTo(10, -12)
+      ..close();
+  }
+
+  @override
+  void paint(Canvas canvas, Rect rect, {TextDirection? textDirection}) {}
+
+  @override
+  ShapeBorder scale(double t) => this;
 }
