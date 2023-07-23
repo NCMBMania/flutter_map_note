@@ -1,12 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:latlng/latlng.dart';
+import 'package:ncmb/ncmb.dart';
 import './row_page.dart';
 
 // 設定画面用のStatefulWidget
 class ListPage extends StatefulWidget {
   const ListPage({Key? key, required this.notes, required this.location})
       : super(key: key);
-  final List<dynamic> notes;
+  final List<NCMBObject> notes;
   final LatLng location;
 
   @override

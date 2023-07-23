@@ -1,4 +1,3 @@
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
 import 'package:latlng/latlng.dart';
@@ -13,7 +12,7 @@ import './note_page.dart';
 class MapPage extends StatefulWidget {
   const MapPage({Key? key, required this.setNotes, required this.location})
       : super(key: key);
-  final Function(List<dynamic>) setNotes;
+  final Function(List<NCMBObject>) setNotes;
   final LatLng location;
   @override
   State<MapPage> createState() => _MapPageState();
@@ -86,8 +85,9 @@ class _MapPageState extends State<MapPage> {
   // マーカーウィジェットを作成する
   Future<Widget> _buildMarkerWidget(
       NCMBObject note, MapTransformer transformer) async {
-    final pos = transformer.toOffset(widget.location);
-    final image = NCMBFile();
+    final geo = note.get("geo") as NCMBGeoPoint;
+    final pos = transformer.toOffset(LatLng(geo.latitude!, geo.longitude!));
+    final image = await NCMBFile.download(note.getString("image"));
     return Positioned(
       left: pos.dx - 16,
       top: pos.dy - 16,
@@ -103,7 +103,35 @@ class _MapPageState extends State<MapPage> {
     );
   }
 
-  Future<void> _onTap(double top, double left, NCMBObject note) async {}
+  Future<void> _onTap(double top, double left, NCMBObject note) async {
+    final image = await NCMBFile.download(note.getString('image'));
+    final tooltip = Container(
+      margin: const EdgeInsets.only(left: 15.0),
+      padding: const EdgeInsets.symmetric(
+        vertical: 5.0,
+        horizontal: 10.0,
+      ),
+      child: Column(children: [
+        Text(note.getString('text')),
+        Text(note.getString('address', defaultValue: "不明") + "付近のメモ"),
+        SizedBox(
+          child: Image.memory(image.data),
+          height: 200,
+        )
+      ]),
+      decoration: const ShapeDecoration(
+        color: Colors.white,
+        shape: BubbleBorder(),
+      ),
+    );
+    setState(() {
+      _tooltip = Positioned(
+        left: left - 170,
+        top: top - 280,
+        child: tooltip,
+      );
+    });
+  }
 
   Future<void> showNotes(MapTransformer transformer) async {
     final notes = await getNotes(transformer.controller.center);
@@ -117,7 +145,16 @@ class _MapPageState extends State<MapPage> {
   }
 
   Future<List<NCMBObject>> getNotes(LatLng location) async {
-    return [];
+    // NCMBGeoPointに変換
+    var geo = NCMBGeoPoint(location.latitude, location.longitude);
+    // 検索用のクエリークラス
+    var query = NCMBQuery('Note');
+    // 位置情報を中心に3km範囲で検索
+    query.withinKilometers('geo', geo, 3);
+    // レスポンスを取得
+    var ary = await query.fetchAll();
+    // List<NCMBObject>に変換
+    return ary.map((obj) => obj as NCMBObject).toList();
   }
 
   // 地図をタップした際のイベント

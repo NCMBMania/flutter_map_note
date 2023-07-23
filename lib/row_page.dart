@@ -26,10 +26,18 @@ class _RowPageState extends State<RowPage> {
 
   Future<void> _getImage() async {
     if (widget.note.get('image') == null) return;
+    final fileName = widget.note.getString('image');
+    final image = await NCMBFile.download(fileName);
+    setState(() {
+      _image = image.data;
+    });
   }
 
   String distance() {
-    return "";
+    final geo = widget.note.get('geo') as NCMBGeoPoint;
+    final dist = Geolocator.distanceBetween(widget.location.latitude,
+        widget.location.longitude, geo.latitude!, geo.longitude!);
+    return dist.toStringAsFixed(0);
   }
 
   @override
@@ -47,9 +55,11 @@ class _RowPageState extends State<RowPage> {
               color: Colors.grey,
             )),
       const Padding(padding: EdgeInsets.only(left: 8)),
-      Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [Text('${distance()}m')])
+      Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(widget.note.getString('text')),
+        Text(widget.note.getString('address', defaultValue: '不明')),
+        Text('${distance()}m')
+      ])
     ]);
   }
 }

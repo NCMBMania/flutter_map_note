@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:latlng/latlng.dart';
+import 'package:ncmb/ncmb.dart';
 import './map_page.dart';
 import './list_page.dart';
 
@@ -20,11 +21,10 @@ class _MainPageState extends State<MainPage> {
     const Tab(text: 'リスト', icon: Icon(Icons.list_outlined)),
   ];
 
-  List<dynamic> _notes = [];
-  // List<NCMBObject> _notes = [];
+  List<NCMBObject> _notes = [];
   final LatLng _location = const LatLng(35.6585805, 139.7454329);
 
-  void _setNotes(List<dynamic> notes) {
+  void _setNotes(List<NCMBObject> notes) {
     setState(() {
       _notes = notes;
     });

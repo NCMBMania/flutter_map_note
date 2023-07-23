@@ -26,6 +26,16 @@ class _NotePageState extends State<NotePage> {
   final picker = ImagePicker();
 
   Future<void> _onPressed() async {
+    final fileName = "${const Uuid().v4()}.$_extension";
+    final geo =
+        NCMBGeoPoint(widget.location!.latitude, widget.location!.longitude);
+    final obj = NCMBObject('Note');
+    obj.sets({'text': _text, 'address': _address, 'geo': geo});
+    if (_image != null) {
+      await NCMBFile.upload(fileName, _image);
+      obj.set('image', fileName);
+    }
+    await obj.save();
     Navigator.pop(context);
   }
 
